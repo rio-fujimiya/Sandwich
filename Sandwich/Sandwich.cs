@@ -77,42 +77,51 @@ namespace Sandwich
 		}
 
 
-		private bool onWire(out Wire wire)　//重なっているかの判定
-		{
-			wire = null;
-			IGH_Attributes att = GetDragingAtt();
-			IGH_DocumentObject obj = att?.GetTopLevel.DocObject;
-			if (obj != null && obj is IGH_Param) //(仮)IGH_Paramのみ
-			{
-				if (wires.Count() == 0) return false;
+		private bool onWire(out Wire wire) //重なっているかの判定
+        {
+            wire = null;
+            IGH_Attributes att = GetDragingAtt();
+            IGH_DocumentObject obj = att?.GetTopLevel.DocObject;
+            if (obj != null && obj is IGH_Param || obj is IGH_Component)
+            {
+                if (wires.Count() == 0) return false;
 
-				RectangleF bounds = att.Bounds;
+                RectangleF bounds = att.Bounds;
 
-				foreach (Wire w in wires)
-				{
-					Region reg = new Region(w.path);
-					if (reg.IsVisible(bounds))
-					{
-						//ドラッグ中のオブジェクトについているワイヤーはスキップ
-						if (obj is IGH_Param param)
-						{
-							if (w.source == param || w.target == param) continue;
-						}
-						else if (obj is IGH_Component comp)
-						{
+                foreach (Wire w in wires)
+                {
+                    Region reg = new Region(w.path);
+                    if (reg.IsVisible(bounds))
+                    {
+                        //ドラッグ中のオブジェクトについているワイヤーはスキップ
+                        if (obj is IGH_Param param)
+                        {
+                            if (w.source == param || w.target == param) continue;
+                        }
+                        else if (obj is IGH_Component comp)
+                        {
+							bool isMyWire = false;
+                            foreach (IGH_Param input in comp.Params.Input)
+                            {
+								if ( w.target == input) isMyWire = true;
+                            }
+                            foreach (IGH_Param output in comp.Params.Output)
+                            {                            
+                                if (w.source == output) isMyWire = true;
+                            }
+                            if (isMyWire) continue;
+                        }
 
-						}
+                        wire = w;
+                        return true;
+                    }
+                }
+            }
 
-						wire = w;
-						return true;
-					}
-				}
-			}
-			
-			return false;
-		}
+            return false;
+        }
 
-		private void SandwichObject(IGH_DocumentObject obj, Wire wire)
+        private void SandwichObject(IGH_DocumentObject obj, Wire wire)
 		{
 			if (obj == null || wire == null) return;
 
@@ -124,10 +133,10 @@ namespace Sandwich
 				undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove target source", wire.target).Actions); 
 				wire.target.RemoveSource(wire.source);
 
-				undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove param source", param).Actions);
-				param.RemoveAllSources();
+                undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove param source", param).Actions);
+                param.RemoveAllSources();
 
-				for (int i = param.Recipients.Count-1; i >= 0; i--)
+                for (int i = param.Recipients.Count-1; i >= 0; i--)
 				{
 					IGH_Param recipient = param.Recipients[i];
 					undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove param recipient", recipient).Actions);
@@ -146,7 +155,52 @@ namespace Sandwich
 					wire.target.AddSource(param);
 				}
 			}
-			else if (obj is IGH_Component comp) //ドラッグ中のオブジェクトがIGH_Componentの場合(保留)
+			else if (obj is IGH_Component comp) //ドラッグ中のオブジェクトがIGH_Componentの場合
+			{
+                // ワイヤーを外す
+                undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove target source", wire.target).Actions);
+                wire.target.RemoveSource(wire.source);
+
+                foreach (IGH_Param input in comp.Params.Input){					
+					undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove component input source", input).Actions);
+					input.RemoveAllSources();
+					break;
+                }
+
+                foreach (IGH_Param output in comp.Params.Output)
+                {
+                    for (int i = output.Recipients.Count - 1; i >= 0; i--)
+                    {
+                        IGH_Param recipient = output.Recipients[i];
+						undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Remove component output recipient", recipient).Actions);
+						recipient.RemoveSource(output);
+                    }
+                    break;
+                }
+
+
+                // ワイヤーをつける
+                foreach (IGH_Param input in comp.Params.Input)
+                {
+                    if (input.Attributes.HasInputGrip)
+                    {
+                        undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Add component input source", input).Actions);
+                        input.AddSource(wire.source);
+                        break;
+                    }
+                }
+
+                foreach (IGH_Param output in comp.Params.Output)
+                {
+                    if (output.Attributes.HasOutputGrip)
+                    {
+                        undoActions.AddRange(this.Canvas.Document.UndoUtil.CreateWireEvent("Add component output recipient", wire.target).Actions);
+                        wire.target.AddSource(output);
+                        break;
+                    }
+                }
+            }
+			else
 			{
 				return;
 			}
@@ -176,7 +230,7 @@ namespace Sandwich
 			return base.RespondToMouseUp(sender, e);
 		}
 
-		public override GH_ObjectResponse RespondToMouseMove(GH_Canvas sender, GH_CanvasMouseEvent e)
+        public override GH_ObjectResponse RespondToMouseMove(GH_Canvas sender, GH_CanvasMouseEvent e)
 		{
 			
 			if (onWire(out Wire wire))
@@ -194,7 +248,7 @@ namespace Sandwich
 			return base.RespondToMouseMove(sender, e);
 		}
 
-		public override void Destroy()
+        public override void Destroy()
 		{
 			//コンストラクタで登録したイベントハンドラを破棄したいときはここに書く
 			this.Canvas.CanvasPostPaintWidgets -= Canvas_PostPaintWidget;
